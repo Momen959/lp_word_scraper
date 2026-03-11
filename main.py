@@ -7,16 +7,17 @@ import time
 from docx import Document
 from concurrent.futures import ThreadPoolExecutor
 
-# --- Performance: Caching results ---
+# --- Scraper & Core Logic ---
+
 @st.cache_data(ttl=3600)
 def get_cambridge_data_fast(word):
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/121.0.0.0"}
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/122.0.0.0"}
     url = f"https://dictionary.cambridge.org/dictionary/english/{word}"
     results = []
     seen_fingerprints = set()
     
     try:
-        resp = requests.get(url, headers=headers, timeout=5)
+        resp = requests.get(url, headers=headers, timeout=7)
         if resp.status_code != 200: return []
         soup = BeautifulSoup(resp.content, 'html.parser')
         senses = soup.select(".def-block, .entry-body__el, .pr.dsense")
@@ -50,7 +51,8 @@ def find_all_instances(word, sources):
     return all_matches
 
 # --- UI Setup ---
-st.set_page_config(page_title="GitHub Deployed Validator", layout="wide")
+
+st.set_page_config(page_title="Curriculum Validator", layout="wide")
 st.title("⚡ High-Performance Curriculum Validator")
 
 with st.sidebar:
@@ -59,22 +61,20 @@ with st.sidebar:
     
     st.divider()
     st.header("2. Result Filters")
-    view_filter = st.multiselect("Display only:", 
+    view_filter = st.multiselect("Display definitions:", 
                                  ["Matching Levels", "Non-Matching Levels", "Not Listed Levels"],
                                  default=["Matching Levels", "Non-Matching Levels", "Not Listed Levels"])
     
     st.divider()
     st.header("3. Cloud Document Links")
     st.info("🚨 Ensure Docs are set to 'Anyone with the link can view'")
-    
-    # Check if we have links stored in session, if not, start empty
     if 'cloud_docs' not in st.session_state:
         st.session_state.cloud_docs = [{"name": "Master List", "url": ""}]
     
     for idx, doc in enumerate(st.session_state.cloud_docs):
         col_a, col_b = st.columns([1, 2])
-        doc['name'] = col_a.text_input(f"Nickname", value=doc['name'], key=f"name_{idx}")
-        doc['url'] = col_b.text_input(f"URL", value=doc['url'], key=f"url_{idx}")
+        doc['name'] = col_a.text_input(f"Nickname", value=doc['name'], key=f"n_{idx}")
+        doc['url'] = col_b.text_input(f"URL", value=doc['url'], key=f"u_{idx}")
 
     if st.button("➕ Add Another Link"):
         st.session_state.cloud_docs.append({"name": "New Source", "url": ""})
@@ -84,15 +84,16 @@ with st.sidebar:
     st.header("4. Local File Uploads")
     uploaded_files = st.file_uploader("Upload .docx files", accept_multiple_files=True)
 
+# --- Main Logic ---
+
 raw_input = st.text_area("Paste word list:", height=100)
 
 if st.button("Validate Now"):
     if raw_input:
         start_time = time.time()
-        # Clean input: Handle commas, tabs, newlines
         words = list(dict.fromkeys(re.findall(r'\b\w+\b', raw_input.lower())))
         
-        # Parallel Sync for Docs
+        # Fast Content Sync
         all_content = {}
         for doc in st.session_state.cloud_docs:
             if doc['url']:
@@ -108,19 +109,18 @@ if st.button("Validate Now"):
         for f in uploaded_files:
             all_content[f.name] = "\n".join([p.text for p in Document(f).paragraphs])
 
-        # Parallel Scraping
-        with st.status(f"Scraping {len(words)} words from Cambridge...", expanded=True) as status:
-            with ThreadPoolExecutor(max_workers=10) as executor:
+        # Parallel Scraping for maximum speed
+        with st.status(f"Scanning {len(words)} words...", expanded=False) as status:
+            with ThreadPoolExecutor(max_workers=5) as executor:
                 scrape_results = list(executor.map(get_cambridge_data_fast, words))
-            status.update(label="Scraping complete!", state="complete", expanded=False)
+            status.update(label="Scanning complete!", state="complete")
         
         word_data_map = dict(zip(words, scrape_results))
 
-        # Output Generation
         for word in words:
             cambridge_data = word_data_map.get(word, [])
             
-            # Sort & Filter per definition
+            # Sort & Filter
             filtered_defs = []
             for item in cambridge_data:
                 is_match = item['level'] in target_levels
@@ -136,20 +136,24 @@ if st.button("Validate Now"):
             instances = find_all_instances(word, all_content)
             
             if filtered_defs or instances:
-                with st.container():
-                    st.markdown(f"### `{word.upper()}`")
-                    c1, c2 = st.columns(2)
-                    with c1:
-                        if instances:
-                            for i in instances: st.warning(f"**{i['source']}**: {i['text']}")
-                        else: st.success("No duplicates.")
-                    with c2:
-                        for l in filtered_defs:
-                            safe = l['level'] in target_levels
-                            unknown = l['level'] == "NOT LISTED"
-                            icon = "✅" if safe else ("❓" if unknown else "❌")
-                            with st.expander(f"{icon} {l['level']} ({l['pos']})"):
-                                st.write(l['definition'])
+                st.markdown(f"### `{word.upper()}`")
+                c1, c2 = st.columns(2)
+                with c1:
+                    if instances:
+                        for i in instances: st.warning(f"**{i['source']}**: {i['text']}")
+                    else: st.success("No duplicates found.")
+                with c2:
+                    for l in filtered_defs:
+                        safe = l['level'] in target_levels
+                        unknown = l['level'] == "NOT LISTED"
+                        icon = "✅" if safe else ("❓" if unknown else "❌")
+                        
+                        with st.expander(f"{icon} {l['level']} ({l['pos']})"):
+                            st.write(f"**Definition:** {l['definition']}")
+                            
+                            # Standard Tab-Separated format for column pasting
+                            copy_string = f"{word.capitalize()} ({l['pos']})\t{l['definition']}"
+                            st.code(copy_string, language=None)
                 st.divider()
         
-        st.toast(f"Total time: {round(time.time() - start_time, 2)}s")
+        st.toast(f"Finished in {round(time.time() - start_time, 2)}s")
