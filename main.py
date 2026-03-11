@@ -53,7 +53,7 @@ def find_all_instances(word, sources):
 # --- UI Setup ---
 
 st.set_page_config(page_title="Curriculum Validator", layout="wide")
-st.title("⚡ Language Palette's High-Performance Vocab Validator")
+st.title("⚡ LP's High-Performance Vocab Validator")
 
 with st.sidebar:
     st.header("1. Target Levels")
