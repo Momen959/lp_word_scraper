@@ -63,13 +63,13 @@ with st.sidebar:
     st.header("2. Result Filters")
     view_filter = st.multiselect("Display definitions:", 
                                  ["Matching Levels", "Non-Matching Levels", "Not Listed Levels"],
-                                 default=["Matching Levels", "Non-Matching Levels", "Not Listed Levels"])
+                                 default=["Matching Levels"])
     
     st.divider()
     st.header("3. Cloud Document Links")
     st.info("🚨 Ensure Docs are set to 'Anyone with the link can view'")
     if 'cloud_docs' not in st.session_state:
-        st.session_state.cloud_docs = [{"name": "Master List", "url": ""}]
+        st.session_state.cloud_docs = [{"name": "Week 1-2", "url": "https://docs.google.com/document/d/1SrzKyDz3CWELZtsfWqRSsS5SWheTB9ff/edit"},{"name": "Week 3-4", "url": "https://docs.google.com/document/d/1olOkpmw6rh4HVpjonrOBNlJ_3mFwRpR0/edit"}]
     
     for idx, doc in enumerate(st.session_state.cloud_docs):
         col_a, col_b = st.columns([1, 2])
