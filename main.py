@@ -31,7 +31,7 @@ def get_cambridge_data_fast(word):
             pos_tag = sense.find_previous(class_="pos dpos")
             pos = pos_tag.get_text().strip() if pos_tag else "word"
             def_tag = sense.select_one(".def.ddef_d.db")
-            definition = def_tag.get_text().strip() if def_tag else "No definition."
+            definition = def_tag.get_text().strip()[:-1] if def_tag else "No definition."
             
             fingerprint = f"{pos}|{level}|{definition[:60]}"
             if fingerprint not in seen_fingerprints:
@@ -69,7 +69,10 @@ with st.sidebar:
     st.header("3. Cloud Document Links")
     st.info("🚨 Ensure Docs are set to 'Anyone with the link can view'")
     if 'cloud_docs' not in st.session_state:
-        st.session_state.cloud_docs = [{"name": "Week 1-2", "url": "https://docs.google.com/document/d/1SrzKyDz3CWELZtsfWqRSsS5SWheTB9ff/edit"},{"name": "Week 3-4", "url": "https://docs.google.com/document/d/1olOkpmw6rh4HVpjonrOBNlJ_3mFwRpR0/edit"}]
+        st.session_state.cloud_docs = [
+            {"name": "Week 1-2", "url": "https://docs.google.com/document/d/1SrzKyDz3CWELZtsfWqRSsS5SWheTB9ff/edit"},
+            {"name": "Week 3-4", "url": "https://docs.google.com/document/d/1olOkpmw6rh4HVpjonrOBNlJ_3mFwRpR0/edit"}
+                                       ]
     
     for idx, doc in enumerate(st.session_state.cloud_docs):
         col_a, col_b = st.columns([1, 2])
