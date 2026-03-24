@@ -11,10 +11,11 @@ from concurrent.futures import ThreadPoolExecutor
 
 def lemmatize(word):
     """Strip common English inflections so we always hit the base-form Cambridge page."""
-    w = word.lower()
+    w = word.lower().strip()
+    if " " in w: return w  # Do not lemmatize phrases like "getting up" to avoid breaking URL
     # Order matters: longer suffixes first
     rules = [
-        (r"n't$",    "not"),    # don't -> do not (edge case, skip)
+        (r"n't$",    "not"),    # don't -> do not
         (r"ies$",    "y"),      # carries -> carry
         (r"ied$",    "y"),      # carried -> carry
         (r"ves$",    "f"),      # leaves -> leaf
@@ -23,16 +24,15 @@ def lemmatize(word):
         (r"ches$",   "ch"),     # watches -> watch
         (r"shes$",   "sh"),     # wishes -> wish
         (r"oes$",    "o"),      # goes -> go
-        (r"ing$",    ""),       # looking -> look (will re-check)
+        (r"ing$",    ""),       # looking -> look
         (r"ing$",    "e"),      # taking -> take
         (r"ed$",     ""),       # looked -> look
         (r"ed$",     "e"),      # liked -> like
-        (r"er$",     ""),       # faster -> fast (adj)
+        (r"er$",     ""),       # faster -> fast
         (r"est$",    ""),       # fastest -> fast
         (r"ly$",     ""),       # quickly -> quick
-        (r"s$",      ""),       # looks -> look, cats -> cat
+        (r"s$",      ""),       # looks -> look
     ]
-    # Try each rule; return first one that shortens the word meaningfully
     for pattern, replacement in rules:
         candidate = re.sub(pattern, replacement, w)
         if candidate and candidate != w and len(candidate) >= 2:
@@ -42,25 +42,35 @@ def lemmatize(word):
 @st.cache_data(ttl=3600)
 def _scrape(query):
     """Fetch and parse Cambridge page for query. Returns list of def dicts."""
+    # Convert "get up" to "get-up" for the URL
+    url_query = query.lower().strip().replace(" ", "-")
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/122.0.0.0"}
     results = []
     seen_fingerprints = set()
     try:
         resp = requests.get(
-            f"https://dictionary.cambridge.org/dictionary/english/{query}",
+            f"https://dictionary.cambridge.org/dictionary/english/{url_query}",
             headers=headers, timeout=7)
         if resp.status_code != 200:
             return []
         soup = BeautifulSoup(resp.content, "html.parser")
-        for sense in soup.select(".def-block, .entry-body__el, .pr.dsense"):
+        # Added .idiom-block for phrase support
+        for sense in soup.select(".def-block, .entry-body__el, .pr.dsense, .idiom-block"):
             lvl_tag = sense.find("span", class_=re.compile(r"dxref\s+[A-C][1-2]"))
             if not lvl_tag:
                 lvl_tag = sense.select_one(".ecl-badge, .dxst, .label-cefr")
             level   = lvl_tag.get_text().upper().strip() if lvl_tag else "NOT LISTED"
+            
             pos_tag = sense.find_previous(class_="pos dpos")
-            pos     = pos_tag.get_text().strip() if pos_tag else "word"
+            # Logic to handle phrasal verbs/idioms which might not have a standard POS tag
+            if "idiom-block" in sense.get("class", []):
+                pos = "idiom"
+            else:
+                pos = pos_tag.get_text().strip() if pos_tag else "phrase"
+                
             def_tag = sense.select_one(".def.ddef_d.db")
             definition = def_tag.get_text().strip()[:-1] if def_tag else "No definition."
+            
             if pos == "word":
                 continue
             fp = f"{pos}|{level}|{definition[:60]}"
@@ -72,8 +82,7 @@ def _scrape(query):
     return results
 
 def get_cambridge_data_fast(word):
-    """Try the word as-is first; if nothing found, try the lemmatized form.
-    Returns (results, word_used) — word_used differs from word when lemma fallback fired."""
+    """Try the word as-is first; if nothing found, try the lemmatized form."""
     results = _scrape(word)
     if results:
         return results, word
@@ -114,13 +123,14 @@ with st.sidebar:
     if 'cloud_docs' not in st.session_state:
         st.session_state.cloud_docs = [
             {"name": "Week 1-2", "url": "https://docs.google.com/document/d/1SrzKyDz3CWELZtsfWqRSsS5SWheTB9ff/edit"},
-            {"name": "Week 3-4", "url": "https://docs.google.com/document/d/1olOkpmw6rh4HVpjonrOBNlJ_3mFwRpR0/edit"}
+            {"name": "Week 3-4", "url": "https://docs.google.com/document/d/1olOkpmw6rh4HVpjonrOBNlJ_3mFwRpR0/edit"},
+            {"name": "Week 5", "url": "https://docs.google.com/document/d/14Hu4JjzTxVnPBF8N5OlQ9_BH_6-CgLZv/edit?usp=sharing&ouid=101711053564080345967&rtpof=true&sd=true"},
                                        ]
     
     for idx, doc in enumerate(st.session_state.cloud_docs):
         col_a, col_b, col_c = st.columns([1, 2, 0.3], vertical_alignment="bottom")
         doc['name'] = col_a.text_input("Nickname", value=doc['name'], key=f"n_{idx}")
-        doc['url']  = col_b.text_input("URL",      value=doc['url'],  key=f"u_{idx}")
+        doc['url']  = col_b.text_input("URL",       value=doc['url'],  key=f"u_{idx}")
         if col_c.button("🗑️", key=f"del_{idx}", help="Remove this link"):
             st.session_state.cloud_docs.pop(idx)
             st.rerun()
@@ -167,7 +177,7 @@ def build_html_table(word_results):
     return '<table style="border-collapse:collapse;width:100%">' + rows_html + '</table>'
 
 word_list_payload = raw_input
-table_html        = build_html_table(st.session_state.get("word_results", []))
+table_html         = build_html_table(st.session_state.get("word_results", []))
 
 CLIP_COMPONENT = """
 <style>
@@ -178,7 +188,7 @@ CLIP_COMPONENT = """
   }
   .cp-btn:hover { background:#3a3b45; }
   #cp-msg { font-family:sans-serif; font-size:13px; color:#21c55d;
-             margin-top:6px; min-height:18px; }
+               margin-top:6px; min-height:18px; }
 </style>
 <textarea id="clip_wordlist" style="display:none">__WORDLIST__</textarea>
 <div id="clip_table_html" style="display:none">__TABLEHTML__</div>
@@ -223,7 +233,8 @@ st.components.v1.html(component_html, height=70)
 if st.button("Validate Now"):
     if raw_input:
         start_time = time.time()
-        words = list(dict.fromkeys(re.findall(r'\b\w+\b', raw_input.lower())))
+        # Phrase-friendly split: Supports commas and newlines
+        words = [w.strip() for w in re.split(r'[,\n]+', raw_input) if w.strip()]
 
         # Fast Content Sync
         all_content = {}
@@ -242,11 +253,10 @@ if st.button("Validate Now"):
             all_content[f.name] = "\n".join([p.text for p in Document(f).paragraphs])
 
         # Parallel Scraping
-        with st.status(f"Scanning {len(words)} words...", expanded=True) as status:
+        with st.status(f"Scanning {len(words)} items...", expanded=True) as status:
             with ThreadPoolExecutor(max_workers=5) as executor:
                 scrape_results = list(executor.map(get_cambridge_data_fast, words))
 
-            # Collect log entries BEFORE calling status.update (closing it hides content added after)
             lemma_log  = []
             no_results = []
             for orig, (res, used) in zip(words, scrape_results):
@@ -255,28 +265,21 @@ if st.button("Validate Now"):
                 elif not used:
                     no_results.append(orig)
 
-            # Write all log lines into the still-open dropdown
             if lemma_log:
-                st.markdown("**⚠️ Lemmatized words:**")
+                st.markdown("**⚠️ Lemmatized/Adjusted words:**")
                 for orig, used in lemma_log:
-                    st.markdown(f"- **{orig}** — no results, searched **{used}** instead")
+                    st.markdown(f"- **{orig}** — searched **{used}** instead")
             if no_results:
                 st.markdown("**❌ No results found:**")
                 for orig in no_results:
                     st.markdown(f"- **{orig}**")
 
-            # Now close/complete the status — content above is already rendered inside it
-            label = f"✅ Done — {len(words)} words scanned"
-            if lemma_log:
-                label += f" · {len(lemma_log)} lemmatized"
-            if no_results:
-                label += f" · {len(no_results)} not found"
+            label = f"✅ Done — {len(words)} items scanned"
             status.update(label=label, state="complete", expanded=True)
 
         word_data_map = {word: res for word, (res, _) in zip(words, scrape_results)}
         word_used_map = {orig: (used or orig) for orig, (res, used) in zip(words, scrape_results)}
 
-        # Collect all results into session_state so Copy Table survives the rerun
         word_results = []
         for word in words:
             cambridge_data = word_data_map.get(word, [])
@@ -298,7 +301,6 @@ if st.button("Validate Now"):
         st.session_state["word_results"] = word_results
         st.toast(f"Finished in {round(time.time() - start_time, 2)}s")
 
-# ── Render results from session_state (persists across copy-button clicks) ───
 for entry in st.session_state.get("word_results", []):
     word          = entry["word"]
     filtered_defs = entry["defs"]
@@ -312,11 +314,12 @@ for entry in st.session_state.get("word_results", []):
     with c1:
         if instances:
             for i in instances: st.warning(f"**{i['source']}**: {i['text']}")
-        else: st.success("No duplicates found.")
+        else:
+            st.success("No duplicates found.")
     with c2:
         if not filtered_defs:
-            cambridge_url = f"https://dictionary.cambridge.org/dictionary/english/{entry.get('word_used', word)}"
-            st.error(f"⚠️ No definitions match your selected levels — consider choosing a different word. [View on Cambridge]({cambridge_url})")
+            cambridge_url = f"https://dictionary.cambridge.org/dictionary/english/{entry.get('word_used', word).replace(' ', '-')}"
+            st.error(f"⚠️ No matching definitions found. [View on Cambridge]({cambridge_url})")
         for l in filtered_defs:
             safe    = l['level'] in target_levels
             unknown = l['level'] == "NOT LISTED"
