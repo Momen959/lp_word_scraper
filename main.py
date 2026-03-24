@@ -41,42 +41,63 @@ def lemmatize(word):
 
 @st.cache_data(ttl=3600)
 def _scrape(query):
-    """Fetch and parse Cambridge page for query. Returns list of def dicts."""
-    # Convert "get up" to "get-up" for the URL
+    """Fetch and parse Cambridge page. Skips entries that lack a clear Part of Speech."""
     url_query = query.lower().strip().replace(" ", "-")
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/122.0.0.0"}
     results = []
     seen_fingerprints = set()
+    
     try:
         resp = requests.get(
             f"https://dictionary.cambridge.org/dictionary/english/{url_query}",
             headers=headers, timeout=7)
         if resp.status_code != 200:
             return []
+        
         soup = BeautifulSoup(resp.content, "html.parser")
-        # Added .idiom-block for phrase support
+        
+        # We iterate through the sense blocks
         for sense in soup.select(".def-block, .entry-body__el, .pr.dsense, .idiom-block"):
+            
+            # 1. Look for the POS tag specifically associated with this block
+            pos_tag = sense.find_previous(class_="pos dpos")
+            
+            # 2. Check if we are in an idiom block (which is a valid type itself)
+            is_idiom = "idiom-block" in sense.get("class", [])
+            
+            if is_idiom:
+                pos = "idiom"
+            elif pos_tag:
+                pos = pos_tag.get_text().strip().lower()
+            else:
+                # If there's no POS tag and it's not an idiom, skip this definition entirely
+                continue
+
+            # 3. Filter out the "word" type (Cambridge's internal label)
+            if pos == "word":
+                continue
+
+            # 4. Extract Level and Definition
             lvl_tag = sense.find("span", class_=re.compile(r"dxref\s+[A-C][1-2]"))
             if not lvl_tag:
                 lvl_tag = sense.select_one(".ecl-badge, .dxst, .label-cefr")
-            level   = lvl_tag.get_text().upper().strip() if lvl_tag else "NOT LISTED"
             
-            pos_tag = sense.find_previous(class_="pos dpos")
-            # Logic to handle phrasal verbs/idioms which might not have a standard POS tag
-            if "idiom-block" in sense.get("class", []):
-                pos = "idiom"
-            else:
-                pos = pos_tag.get_text().strip() if pos_tag else "phrase"
-                
+            level = lvl_tag.get_text().upper().strip() if lvl_tag else "NOT LISTED"
+            
             def_tag = sense.select_one(".def.ddef_d.db")
-            definition = def_tag.get_text().strip()[:-1] if def_tag else "No definition."
-            
-            if pos == "word":
+            if not def_tag:
                 continue
+                
+            definition = def_tag.get_text().strip()
+            if definition.endswith(":"):
+                definition = definition[:-1]
+
+            # 5. Prevent duplicates via fingerprinting
             fp = f"{pos}|{level}|{definition[:60]}"
             if fp not in seen_fingerprints:
                 results.append({"pos": pos, "level": level, "definition": definition})
                 seen_fingerprints.add(fp)
+                
     except:
         pass
     return results
@@ -125,7 +146,7 @@ with st.sidebar:
             {"name": "Week 1-2", "url": "https://docs.google.com/document/d/1SrzKyDz3CWELZtsfWqRSsS5SWheTB9ff/edit"},
             {"name": "Week 3-4", "url": "https://docs.google.com/document/d/1olOkpmw6rh4HVpjonrOBNlJ_3mFwRpR0/edit"},
             {"name": "Week 5", "url": "https://docs.google.com/document/d/14Hu4JjzTxVnPBF8N5OlQ9_BH_6-CgLZv/edit?usp=sharing&ouid=101711053564080345967&rtpof=true&sd=true"},
-                                       ]
+        ]
     
     for idx, doc in enumerate(st.session_state.cloud_docs):
         col_a, col_b, col_c = st.columns([1, 2, 0.3], vertical_alignment="bottom")
